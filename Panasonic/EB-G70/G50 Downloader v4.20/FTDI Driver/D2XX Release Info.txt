@@ -1,0 +1,21 @@
+FTDI - D2XX Driver Release Information
+
+Version No.	Date		Changes
+
+1.03.20		29 July 2002	Improved Support for surprise removal ( Win2000 / WinXP )
+				Version Number updated in INF file
+
+1.04.01		07 August 2002	Suspend / Resume Problem fixed with Open Devices ( Win2000 / WinXP )
+				
+1.05.01		04 October 2002	Supports USB transfer sizes up to 64Kbytes
+				Works with USB2.0 host controllers
+
+1.05.03		08 Nov 2002	Supports BM devices.
+
+1.05.04		08 Nov 2002	Added FT_GetDeviceInfo.
+
+
+
+
+				
+
