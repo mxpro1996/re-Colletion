@@ -5,7 +5,17 @@
 *   External SRAM:  0x08000000 - 0x08FFFFFF (16 MiB)
 *   On-chip IRAM:   0x40000000 - 0x4001FFFF (128 KiB)
 
+- System
+KADAK ARM AMX-RTOS
+aAmx4ThumbKerne DCB "AMX 4-Thumb Kernel v%x.%02x%c All rights reserved.",0xA
+                DCB "Copyright (c) 1997-1999 KADAK Products Ltd.",0xA,0
+                aVer102a        DCB "VER=1.02a",0
+                aClass9         DCB "CLASS=9",0
+                aTsid26         DCB "TSID=26",0
+                aPnPn4221       DCB "PN=PN422-1",0
+                DCB 0, 0, 0
 
+- HW
 (ADI AD6527/8B?) GSM Processor U101
 Package 204-Ball CSPBGA
 Feature
