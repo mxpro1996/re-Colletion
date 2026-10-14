@@ -6,7 +6,7 @@
 *   On-chip IRAM:   0x40000000 - 0x4001FFFF (128 KiB)
 
 
-(ADI AD6527?) GSM Processor U101
+(ADI AD6527/8B?) GSM Processor U101
 Package 204-Ball CSPBGA
 Feature
 Complete single chip GSM Programmable Digital Baseband Processor divided into three main subsystems:
