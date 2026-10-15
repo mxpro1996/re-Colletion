@@ -74,7 +74,7 @@ typedef struct {
 static uint32_t borland_rand(PRNGState *s)
 {
     s->lo = 0x015A4E35 * (s->lo) + 1;
-    return (*lo >> 16) & 0x7FFF;
+    return (s->lo >> 16) & 0x7FFF;
 }
 
 /*
