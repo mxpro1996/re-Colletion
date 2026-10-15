@@ -81,28 +81,12 @@ static uint32_t sub_43D004(PRNGState *s)
 {
     const uint32_t old_lo = s->lo;
     const uint32_t old_hi = s->hi;
-
-    /*
-     * v4 = 20021LL * old_lo
-     */
     const uint64_t p = 20021ULL * (uint64_t)old_lo;
 
-    /*
-     * HIDWORD(v4) +=
-     *      20021 * old_hi
-     *    + 346   * old_lo
-     */
     uint32_t new_hi =
         (uint32_t)(p >> 32)
         + (uint32_t)(20021ULL * (uint64_t)old_hi)
         + (uint32_t)(346ULL   * (uint64_t)old_lo);
-
-    /*
-     * v5 = v4 + 1
-     *
-     * Low DWORD gets +1.
-     * If low DWORD overflows, carry into high DWORD.
-     */
     uint32_t new_lo = (uint32_t)p;
 
     ++new_lo;
@@ -115,14 +99,6 @@ static uint32_t sub_43D004(PRNGState *s)
     return new_hi & 0x7FFFFFFFu;
 }
 
-/*
- * Equivalent to:
- *
- *   sub_4176A0(20)
- *   {
- *       return sub_43D004() % 20;
- *   }
- */
 static uint8_t sub_4176A0_20(PRNGState *s)
 {
     return (uint8_t)(sub_43D004(s) % 20u);
