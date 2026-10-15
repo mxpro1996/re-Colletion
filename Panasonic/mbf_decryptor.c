@@ -110,6 +110,8 @@ static uint8_t sub_4176A0_20(PRNGState *s)
 static int generate_key_table(PRNGState *state,
                               uint8_t table[KEY_TABLE_SIZE])
 {
+    sub_4176A0_20(state);
+    // pre-step one
     for (uint32_t i = 0; i < KEY_TABLE_SIZE; ++i)
         table[i] = sub_4176A0_20(state);
 
@@ -352,17 +354,7 @@ static int decrypt_mbf(const char *input_path,
         return -1;
     }
 
-    /*
-     * Important:
-     *
-     * The supplied debugger sample is:
-     *   36 4E 5A 01 00 00 00 00
-     *
-     * => LO=0x015A4E36, HI=0.
-     *
-     * This function intentionally does NOT force the state to 1/0.
-     * Pass the verified state from the debugger.
-     */
+    // 1,0 as TLS
     PRNGState state = {
         .lo = state_lo,
         .hi = state_hi
@@ -569,9 +561,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    uint32_t state_lo = 0x015A4E36u;
-    uint32_t state_hi = 0x00000000u;
-    uint32_t a4 = 0x00000345u;  // fixed for V1.0
+    uint32_t state_lo = 1;
+    uint32_t state_hi = 0;
+    uint32_t a4 = 0x00000345u;  // fixed for V1.0, or 0x777 has prebuilt table
     uint32_t multiplier = 4096u; // chunk2-4K unit
 
     if (argc >= 4)
