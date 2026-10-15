@@ -219,7 +219,9 @@ static void print_header_meta(const uint8_t *h)
     printf("  0x038 u32 count         = %" PRIu32 "\n",
            rd_u32_le(h + 0x038));
 
-    for (unsigned off = 0x03C; off <= 0x0A8; off += 4)
+    printf("  0x03C load_addr        = 0x%08" PRIX32 "\n",
+            rd_u32_le(h + 0x03C));
+    for (unsigned off = 0x040; off <= 0x0A8; off += 4)
         printf("  0x%03X entry            = 0x%08" PRIX32 "\n",
                off, rd_u32_le(h + off));
 
