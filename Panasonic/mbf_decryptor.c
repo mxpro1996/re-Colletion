@@ -71,6 +71,12 @@ typedef struct {
     uint16_t magic2;
 } MBFHeader;
 
+static uint32_t borland_rand(PRNGState *s)
+{
+    s->lo = 0x015A4E35 * (s->lo) + 1;
+    return (*lo >> 16) & 0x7FFF;
+}
+
 /*
  * Equivalent to sub_43D004().
  *
@@ -110,7 +116,7 @@ static uint8_t sub_4176A0_20(PRNGState *s)
 static int generate_key_table(PRNGState *state,
                               uint8_t table[KEY_TABLE_SIZE])
 {
-    sub_4176A0_20(state);
+    borland_rand(state);
     // pre-step one
     for (uint32_t i = 0; i < KEY_TABLE_SIZE; ++i)
         table[i] = sub_4176A0_20(state);
