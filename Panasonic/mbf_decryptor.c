@@ -219,13 +219,16 @@ static void print_header_meta(const uint8_t *h)
         printf("  0x%03X u32              = 0x%08" PRIX32 "\n",
                off, rd_u32_le(h + off));
 
+    unsigned varcount = rd_u32_le(h + 0x038);               
     printf("  0x038 u32 count         = %" PRIu32 "\n",
            rd_u32_le(h + 0x038));
 
-    printf("  0x03C load_addr        = 0x%08" PRIX32 "\n",
-            rd_u32_le(h + 0x03C));
-    for (unsigned off = 0x040; off <= 0x0A8; off += 4)
-        printf("  0x%03X entry            = 0x%08" PRIX32 "\n",
+    for (unsigned off = 0x03C; off < 0x03C+varcount*8; off += 4*2)
+        printf("  0x%03X region        0x%08x-0x%08x" PRIX32 "\n",
+               off, rd_u32_le(h + off), rd_u32_le(h + off+4));
+
+    for (unsigned off = 0x03C+varcount*8; off <= 0x0A8; off += 4)
+        printf("  0x%03X entry        0x%08x" PRIX32 "\n",
                off, rd_u32_le(h + off));
 
     for (unsigned off = 0x0AC; off <= 0x0D0; off += 4)
@@ -313,183 +316,9 @@ static void print_first_keys(const uint8_t table[KEY_TABLE_SIZE],
         if (idx >= KEY_TABLE_SIZE)
             break;
 
-        printf("  [%02u] table[0x%03" PRIX32 "] = %u\n",
-               i, idx, table[idx]);
+        printf("%02x ", table[idx]);
     }
-}
-
-/* ------------------------------------------------------------------ *
- *  Embedded ARM stub excavation  (header 0x064 .. 0x0B3)
- *
- *  Minimal addition: decode the stub that sits inside the 0x178-byte
- *  header, resolve its PC-relative LDR literals (which live in
- *  payload1) and follow its BL targets.
- * ------------------------------------------------------------------ */
-
-static const char *reg_name(unsigned r)
-{
-    static const char *t[16] = { "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7",
-                                 "R8", "R9", "R10", "R11", "R12", "SP", "LR", "PC" };
-    return t[r & 15u];
-}
-
-/*
- * Decode the handful of ARM encodings the MBF boot stub uses.
- * `full`/`full_size` point at the decrypted image so that PC-relative
- * LDR literals can be resolved to their real values.
- * Returns 0 on success, -1 for anything not modelled.
- */
-static int decode_arm(uint32_t w, uint32_t addr,
-                      const uint8_t *full, size_t full_size,
-                      char *out, size_t n)
-{
-    /* MOV R0, R0  (canonical NOP) */
-    if (w == 0xE1A00000u) {
-        snprintf(out, n, "MOV  R0, R0                     ; NOP");
-        return 0;
-    }
-
-    /* 0x12 opcode family: BX / BLX(reg) / MSR(reg) */
-    if (((w >> 20) & 0xFFu) == 0x12u) {
-        unsigned op = (w >> 4) & 0xFu;
-
-        if (((w >> 8) & 0xFFFu) == 0xFFFu && (op == 1u || op == 3u)) {
-            snprintf(out, n, "%s %s", op == 3u ? "BLX " : "BX  ",
-                     reg_name(w & 0xFu));
-            return 0;
-        }
-        if (((w >> 12) & 0xFu) == 0xFu && (w & 0xFF0u) == 0u) {
-            unsigned f = (w >> 16) & 0xFu;
-            char fm[6];
-            int k = 0;
-
-            if (f & 8u) fm[k++] = 'c';
-            if (f & 4u) fm[k++] = 'x';
-            if (f & 2u) fm[k++] = 's';
-            if (f & 1u) fm[k++] = 'f';
-            fm[k] = '\0';
-
-            snprintf(out, n, "MSR  %s_%s, %s",
-                     ((w >> 22) & 1u) ? "SPSR" : "CPSR", fm,
-                     reg_name(w & 0xFu));
-            return 0;
-        }
-    }
-
-    /* MOV Rd, #imm  (with rotate) */
-    if ((w & 0x0FBF0000u) == 0x03A00000u) {
-        uint32_t imm = w & 0xFFu;
-        uint32_t rot = ((w >> 8) & 0xFu) * 2u;
-
-        if (rot)
-            imm = (imm >> rot) | (imm << (32u - rot));
-
-        snprintf(out, n, "MOV  %s, #0x%X", reg_name((w >> 12) & 0xFu), imm);
-        return 0;
-    }
-
-    /* ADD Rd, Rn, Rm */
-    if ((w & 0x0FE00000u) == 0x00800000u && (w & 0x10u) == 0u) {
-        snprintf(out, n, "ADD  %s, %s, %s",
-                 reg_name((w >> 12) & 0xFu), reg_name((w >> 16) & 0xFu),
-                 reg_name(w & 0xFu));
-        return 0;
-    }
-
-    /* MOV Rd, Rm */
-    if ((w & 0x0FE00000u) == 0x01A00000u) {
-        snprintf(out, n, "MOV  %s, %s",
-                 reg_name((w >> 12) & 0xFu), reg_name(w & 0xFu));
-        return 0;
-    }
-
-    /* BL */
-    if ((w & 0x0F000000u) == 0x0B000000u) {
-        int32_t off = (int32_t)(w & 0xFFFFFFu);
-
-        if (off & 0x800000)
-            off -= 0x1000000;
-
-        snprintf(out, n, "BL   0x%X",
-                 (uint32_t)(addr + 8u + ((uint32_t)off << 2)));
-        return 0;
-    }
-
-    /* LDR Rt, [PC, #imm]  -> literal pool entry */
-    if ((w & 0x0C100000u) == 0x04100000u && ((w >> 16) & 0xFu) == 0xFu) {
-        uint32_t imm = w & 0xFFFu;
-        char sign = ((w >> 23) & 1u) ? '+' : '-';
-        uint32_t lit = ((w >> 23) & 1u) ? addr + 8u + imm : addr + 8u - imm;
-        unsigned rd = (w >> 12) & 0xFu;
-
-        if ((size_t)lit + 4u <= full_size) {
-            snprintf(out, n,
-                     "LDR  %s, [PC, #%c0x%X]   ; file 0x%X = 0x%08X",
-                     reg_name(rd), sign, imm, lit, rd_u32_le(full + lit));
-        } else {
-            snprintf(out, n,
-                     "LDR  %s, [PC, #%c0x%X]   ; file 0x%X (out of range)",
-                     reg_name(rd), sign, imm, lit);
-        }
-        return 0;
-    }
-
-    return -1;
-}
-
-/*
- * Disassemble the header stub and follow its BL targets.
- * `h` is the header base, i.e. `full + MBF_HEADER_FILE_OFFSET`, and
- * all addresses printed are *file offsets*.
- */
-static void dump_arm_stub(const uint8_t *h, const uint8_t *full, size_t full_size)
-{
-    uint32_t targets[4];
-    unsigned ntargets = 0;
-
-    printf("\n=== Embedded ARM stub (header 0x064..0x0B3) ===\n");
-
-    for (unsigned off = 0x064; off < 0x0B4; off += 4) {
-        uint32_t w = rd_u32_le(h + off);
-        uint32_t addr = off + MBF_HEADER_FILE_OFFSET;
-        char m[112];
-
-        if (decode_arm(w, addr, full, full_size, m, sizeof m) == 0) {
-            printf("  %04X  %08" PRIX32 "  %s\n", off, w, m);
-
-            if ((w & 0x0F000000u) == 0x0B000000u && ntargets < 4) {
-                int32_t off2 = (int32_t)(w & 0xFFFFFFu);
-
-                if (off2 & 0x800000)
-                    off2 -= 0x1000000;
-                targets[ntargets++] =
-                    (uint32_t)(addr + 8u + ((uint32_t)off2 << 2));
-            }
-        } else {
-            printf("  %04X  %08" PRIX32 "  .word 0x%08" PRIX32 "\n", off, w, w);
-        }
-    }
-
-    for (unsigned t = 0; t < ntargets; ++t) {
-        uint32_t tgt = targets[t];
-
-        printf("\n  --- BL target, file offset 0x%X ---\n", tgt);
-
-        for (unsigned i = 0; i < 12; ++i) {
-            uint32_t a = tgt + i * 4u;
-            uint32_t w;
-            char m[112];
-
-            if ((size_t)a + 4u > full_size)
-                break;
-
-            w = rd_u32_le(full + a);
-            if (decode_arm(w, a, full, full_size, m, sizeof m) == 0)
-                printf("    %04X  %08" PRIX32 "  %s\n", a, w, m);
-            else
-                printf("    %04X  %08" PRIX32 "  .word 0x%08" PRIX32 "\n", a, w, w);
-        }
-    }
+    putchar('\n');
 }
 
 static int decrypt_mbf(const char *input_path,
@@ -707,7 +536,7 @@ static int decrypt_mbf(const char *input_path,
            0x178u + (hdr.payload1_end - hdr.payload1_start));
     printf("  after payload2 = 0x%08" PRIX32 "\n", kr.counter);
 
-    dump_arm_stub(h, dec, src.size);
+    //dump_arm_stub(h, dec, src.size);
 
     if (save_file(output_path, dec, src.size) != 0) {
         fprintf(stderr, "failed to save output\n");
