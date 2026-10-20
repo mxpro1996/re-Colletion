@@ -1,0 +1,15 @@
+# build / runtime artefacts
+__pycache__/
+*.pyc
+
+# forged / generated images -- never commit binaries
+*.mbn
+*.bin
+*.elf
+_selftest_*
+
+# vendored clones of the reference repositories (see CREDIT.md)
+repos/
+
+# local session data
+.workbuddy-ai/
