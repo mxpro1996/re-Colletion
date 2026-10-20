@@ -22,6 +22,7 @@ vendor tooling.
 | `pbl_siglen_intuition.py` | three controlled experiments (window width, the `s^3 < n` dead line, why L=256 is hopeless) |
 | `l_sweep.py` | sweeps the usable range of `L` against a real image and reports why each value passes or fails |
 | `pbl_8916_model.py` | MSM8916's verifier modelled side by side with MSM8612's -- shows the fix, on the same forged image |
+| `pbl_siglen_triage.py` | IDA script: run it on any boot ROM to see whether the window is sized from the modulus or the header |
 | `docs/vulnerability.md` | the bug, the IDA evidence, the exact PBL checks, and the MSM8916 comparison |
 | `docs/hardware-evidence.md` | the on-device validation log (MSM8612, Sahara/firehose) |
 | `docs/mbn-format.md` | legacy MBN header layout, address arithmetic, digest chain |
@@ -131,6 +132,42 @@ firmware build. The same routine is duplicated in SBL1 and TrustZone; those
 copies live in flash and were corrected at some point, which hardens the *stock*
 chain but does not rescue the PBL -- a forged SBL1 is just a file, and whoever
 can boot one can strip its signature checks first.
+
+## Guessing about other parts
+
+Do not sort parts by model number or by release date -- sort them by **boot ROM
+code line**, which is visible in the dump:
+
+| code line | packaging | what to expect |
+|---|---|---|
+| MSM8960 / MSM8974 / APQ8084 family (Krait, 2012-2014) | legacy MBN, `auth_verify_signature` | the vulnerable form; APQ8064, APQ8084 and MSM8974 are confirmed |
+| MSM8916 and later A53 parts | ELF SBL, `pbl_elf_loader.c` | MSM8916 confirmed fixed; the rest of the line very likely follows |
+
+`MSM8930` and `MSM8939` differ by one digit and belong to different lines
+entirely: 8930 is an MSM8960-family Krait part (same generation as the confirmed
+APQ8064), while 8939 is an A53 part from the 8916 line. Sorting by number gets
+this exactly backwards.
+
+The only real answer is a dump. `pbl_siglen_triage.py` runs inside IDA on any
+boot ROM and prints the one window that decides it:
+
+```
+python (in IDA):  exec(open(r"...\pbl_siglen_triage.py").read())
+```
+
+It finds the `00 01 FF FF` / `00 FF FF FF` sentinels, follows the xrefs, and
+shows the lines around every `...,LSR#2`. On MSM8916 that is:
+
+```
+0x110040  MOV R1, #0xFFFFFFFF
+0x110044  ADD R2, R8, R0,LSR#2        ; start = (hash_len>>2)+1
+0x110048  LDR R0, [SP,#var_8A0]       ; word count of the MODULUS
+0x11004c  SUB R1, R0, #1              ; bound = mod_words-1     <- fixed
+```
+
+On MSM8612 the same window reads `LDR R0,[R4,#0x1C]` (a header field) followed by
+`ADD R1,R1,R0,LSR#2` -- no `SUB ... #1` from a bignum, because the bound *is* the
+header value. That difference is the whole verdict.
 
 ## On-device validation (MSM8612)
 
