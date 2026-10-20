@@ -1,11 +1,24 @@
 # legacy-fakeSigner
-**Templated by AI, with the progress of interpret, I will restruct it.**\
+**Templated by AI, with the progress of interpreting, I will restruct it.**\
 The legacy PBL is blinded by the signature length from the image header and never requires it to equal the RSA modulus length. \
 When any certificate in the chain carries
 public exponent **e = 3**, that is enough to forge a signature over an arbitrary
 image with no private key at all.
 
 ---
+
+## Affected range
+
+Confirmed first-hand, by disassembling the boot ROMs:
+
+| target | state |
+|---|---|
+| APQ8064 PBL | vulnerable |
+| APQ8084 PBL | vulnerable |
+| MSM8974 PBL | vulnerable |
+| MSM8x10 PBL | vulnerable |
+| MSM8x26 PBL | vulnerable |
+
 
 ## Quick start
 
