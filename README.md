@@ -44,7 +44,7 @@ python mbn_fakesign.py verify --mbn firehose_signed.mbn \
         --sw-id 0000000000000003 --hw-id 008150E100150017
 ```
 
-Transplanting code from one image into another ("移花接木") is the same command
+Transplanting code from one image into another is the same command
 with an explicit donor:
 
 ```bash
