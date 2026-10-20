@@ -1,11 +1,11 @@
 # Qualcomm PBL short-signature forgery (legacy MBN)
 
 A pure-Python research toolkit that reproduces, and demonstrates end to end, the
-Qualcomm **Primary Boot Loader (PBL) short-signature flaw**: the PBL takes the
-signature length from the image header (attacker controlled) and never requires
-it to equal the RSA modulus length. When any certificate in the chain carries
-public exponent **e = 3**, that is enough to forge a signature over an arbitrary
-image with no private key at all.
+Qualcomm **Primary Boot Loader (PBL) short-signature flaw**: on affected parts
+the PBL takes the signature length from the image header (attacker controlled)
+and never requires it to equal the RSA modulus length. When any certificate in
+the chain carries public exponent **e = 3**, that is enough to forge a signature
+over an arbitrary image with no private key at all.
 
 Everything here is standard library only -- no `pycryptodome`, no `openssl`, no
 vendor tooling.
@@ -21,7 +21,8 @@ vendor tooling.
 | `pkcs1_primer.py` | teaches the crypto: why a *narrower window* turns e=3 from safe into forgeable |
 | `pbl_siglen_intuition.py` | three controlled experiments (window width, the `s^3 < n` dead line, why L=256 is hopeless) |
 | `l_sweep.py` | sweeps the usable range of `L` against a real image and reports why each value passes or fails |
-| `docs/vulnerability.md` | the bug, the IDA evidence, the exact PBL checks |
+| `pbl_8916_model.py` | MSM8916's verifier modelled side by side with MSM8612's -- shows the fix, on the same forged image |
+| `docs/vulnerability.md` | the bug, the IDA evidence, the exact PBL checks, and the MSM8916 comparison |
 | `docs/hardware-evidence.md` | the on-device validation log (MSM8612, Sahara/firehose) |
 | `docs/mbn-format.md` | legacy MBN header layout, address arithmetic, digest chain |
 | `CREDIT.md` | references and acknowledgements |
@@ -108,6 +109,21 @@ Confirmed by disassembling the boot ROMs:
 | APQ8084 PBL | vulnerable | oscardagrach, first-hand |
 | **MSM8974 PBL** | **vulnerable** | oscardagrach, first-hand; digest construction for MSM8974 also documented by TalAloni (Note 3) |
 | **MSM8612 PBL** | **vulnerable** | this repository -- IDA confirmed **and** validated on real hardware |
+| **MSM8916 PBL** | **not vulnerable** | this repository -- IDA confirmed: the window is sized from the modulus, not the header |
+
+MSM8916 is worth calling out because it is the control case. It moved to an
+ELF-based SBL (`pbl_elf_loader.c`), but the verification math is unchanged --
+same `0x36`/`0x5C` digest chain, same shape checks. The only difference is that
+the padding scan and the top-word check are indexed by the **modulus** word count
+(`0x110048 LDR R0,[SP,#var_8A0]` / `0x11004c SUB R1,R0,#1`) instead of by
+`sig_len` (`0xfc01f390 LDR R0,[R4,#0x1C]` / `0xfc01f394 ADD R1,R1,R0,LSR#2`).
+That single change is sufficient: the same 60-byte forged signature that MSM8612
+accepts is rejected `1148` on the MSM8916 model. See the appendix of
+`docs/vulnerability.md`.
+
+Notably MSM8916 still does **not** enforce `sig_len == mod_len` -- it relies
+entirely on sizing the window from the key, which is a live demonstration that
+either defence alone is enough.
 
 The PBL is mask ROM. There is no update path and no fuse that changes the
 routine, so "vulnerable" is a permanent property of the silicon, not of a
