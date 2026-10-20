@@ -1,5 +1,5 @@
 # legacy-fakeSigner
-
+**Templated by AI, with the progress of interpret, I will restruct it.**\
 The legacy PBL is blinded by the signature length from the image header and never requires it to equal the RSA modulus length. \
 When any certificate in the chain carries
 public exponent **e = 3**, that is enough to forge a signature over an arbitrary
