@@ -541,6 +541,12 @@ def _int_auto(s):
 
 def cmd_sign(a):
     # ---- target image (supplies the code) ----
+    if a.payload and a.payload_mbn:
+        raise SystemExit(
+            "--payload and --payload-mbn are mutually exclusive.\n"
+            "  --payload      raw code file (hashed verbatim)\n"
+            "  --payload-mbn  legacy MBN (only its code segment is hashed)")
+
     tbuf = thdr = None
     if a.payload_mbn:
         tbuf = open(a.payload_mbn, "rb").read()
@@ -583,7 +589,21 @@ def cmd_sign(a):
 
     # ---- code ----
     if a.payload:
-        code = bytearray(open(a.payload, "rb").read())
+        with open(a.payload, "rb") as f:
+            blob = f.read()
+
+        check = MbnHeader.read(blob)
+        if check is not None:
+            raise SystemExit(
+                "--payload %s is a legacy MBN, not a raw code file.\n"
+                "    header @0x%x  ImageType=0x%x  CodeSize=%d  BodySize=%d\n"
+                "--payload hashes the WHOLE file as code, so the MBN header, "
+                "signature and cert store would all be hashed as if they were payload.\n"
+                "Use --payload-mbn %s instead: it extracts only the code segment."
+                % (a.payload, check.base, check.image_type,
+                   check.code_size, check.body_size, a.payload))
+
+        code = bytearray(blob)
         print("[+] payload: raw file %s (%d bytes)" % (a.payload, len(code)))
     elif thdr is not None:
         off = thdr.file_off(thdr.load_addr)
