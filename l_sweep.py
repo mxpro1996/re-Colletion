@@ -5,7 +5,12 @@ Sweep the usable range of L (the declared signature length) against a real image
 and confirm four things:
   1. s^3 < n is the real hard cap (e*8L < log2 n)
   2. the digest must be odd (otherwise no cube root exists mod 2^k)
-  3. L does not have to be a multiple of 4 -- the PBL never reads the top 1..3 bytes
+  3. the signature-window checks do not care whether L is a multiple of 4 -- the
+     PBL never reads the top 1..3 bytes -- BUT the cert store does care:
+     CertStoreAddress = SigAddress + L, and it is parsed word-wise. Non-multiples
+     of 4 leave it unaligned and real hardware rejects the image before
+     verification runs, so the values marked ACCEPTED here are only usable when
+     L % 4 == 0.
   4. the PBL only demands 5 0xFF bytes of padding, looser than PKCS#1's 8-byte floor
 
 Usage:
@@ -105,7 +110,10 @@ for L in range(38, 90):
     nbytes = n.to_bytes(256, "big")
     ok, rc = m.pbl_verify_signature(nbytes, b"\x03", s.to_bytes(L, "big"), d3)
     bits = (s.bit_length()) * e
+    verdict = "ACCEPTED" if ok else "rejected %d (%s)" % (rc, m.FAIL.get(rc, "?"))
+    if ok and L % 4:
+        # CertStoreAddress = SigAddress + L; the cert store is parsed word-wise.
+        verdict = "ACCEPTED* (unaligned cert store: unusable)"
     print("%-4d %-6s %-10d %-9s %-6d %s"
           % (L, d3.hex()[-2:], bits, "yes" if pow(s, e) < n else "no",
-             nff(L, len(d3)),
-             "ACCEPTED" if ok else "rejected %d (%s)" % (rc, m.FAIL.get(rc, "?"))))
+             nff(L, len(d3)), verdict))

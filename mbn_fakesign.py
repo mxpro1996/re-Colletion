@@ -383,6 +383,19 @@ def audit(buf):
         probs.append("CertAddress 0x%x != SigAddr 0x%x + SigLen %d (= 0x%x)" % (
             hdr.cert_addr, hdr.sig_addr, hdr.sig_len, hdr.sig_addr + hdr.sig_len))
 
+    # The PBL walks the signature and the certificate store word-wise, and
+    # CertAddress is SigAddress + SigLength. So a SigLength that is not a
+    # multiple of 4 pushes the certificate store off alignment. Real devices
+    # reject the image before verification ever runs -- observed on MSM8612 as
+    # a Sahara error right after the header lands, for L in {46, 53} but not
+    # for L = 60. Keep this check: it is the difference between an image the
+    # model calls ACCEPTED and one a device will actually load.
+    for name, addr in (("SigAddress", hdr.sig_addr), ("CertAddress", hdr.cert_addr)):
+        if addr % 4:
+            probs.append("%s 0x%x is not 4-byte aligned -- the PBL indexes these "
+                         "word-wise; use a SigLength that is a multiple of 4"
+                         % (name, addr))
+
     for name, off, ln in (("code", hdr.file_off(hdr.load_addr), hdr.code_size),
                           ("signature", hdr.file_off(hdr.sig_addr), hdr.sig_len),
                           ("cert store", hdr.file_off(hdr.cert_addr), hdr.cert_len)):
@@ -629,7 +642,14 @@ def cmd_sign(a):
     max_L = n.bit_length() // (8 * e)
     # Sweep starts at 44 because RFC 8017 asks for >= 8 0xFF bytes. The PBL
     # itself only demands 5, so L >= 40 also works -- pass --L 40 to squeeze.
-    cands = ([a.L] if a.L else list(range(44, max_L + 1)))
+    if a.L:
+        cands = [a.L]
+    elif a.any_L:
+        # L that is not a multiple of 4 leaves CertAddress = SigAddr + L
+        # unaligned. The model accepts it; hardware has not. Explicit opt-in.
+        cands = list(range(40, max_L + 1))
+    else:
+        cands = [x for x in range(44, max_L + 1) if x % 4 == 0]
     print("[+] candidate L: %s  (hard cap %d, because e*8L < log2 n)" % (cands, max_L))
 
     for L in cands:
@@ -776,6 +796,7 @@ def cmd_selftest(a):
     a.sw_id = "0000000000000000" if not a.sw_id else a.sw_id
     a.hw_id = "0000000000000001" if not a.hw_id else a.hw_id
     a.L = a.L
+    a.any_L = False
     a.code_pad = 0
     # overwrite with a fresh payload, to prove this signs *any* image
     pl = os.path.join(os.path.dirname(tmp), "_selftest_payload.bin")
@@ -835,7 +856,10 @@ def main():
     p.add_argument("--key2", help="override the outer 0x5c key (8 bytes hex)")
     p.add_argument("--hash", choices=["auto", "sha1", "sha256"], default="auto")
     p.add_argument("--leaf-index", type=int, default=0)
-    p.add_argument("--L", type=int, help="signature length; omit to sweep 44..hard cap")
+    p.add_argument("--L", type=int, help="signature length; omit to sweep the safe values")
+    p.add_argument("--any-L", action="store_true",
+                   help="also try L that is not a multiple of 4 (unaligned CertAddress; "
+                        "accepted by the model, not validated on hardware)")
     p.add_argument("--code-pad", type=int, default=0, help="append N zero bytes to code to change D3")
     p.set_defaults(func=cmd_sign)
 

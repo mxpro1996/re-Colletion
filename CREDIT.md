@@ -75,10 +75,15 @@ descriptions:
    certificate and its parent, never for the image being verified. A mismatch
    between a transplanted image's size and a chain's `SW_SIZE` therefore does
    not stop anything.
-2. **The usable range of `L` is wider and looser than usually stated.**
-   Measured against real MSM8612 firmware: `L = 40 .. 85` (not 44..72), `L` need
-   not be a multiple of 4, and the PBL enforces five `0xFF` padding bytes rather
-   than PKCS#1's eight.
+2. **The usable range of `L` is wider than usually stated, but with an
+   alignment condition the published accounts miss.** Measured against real
+   MSM8612 firmware: `L = 40 .. 85` (not 44..72), and the PBL enforces five
+   `0xFF` padding bytes rather than PKCS#1's eight. However the signature-window
+   checks tolerating any `L` is not the whole constraint:
+   `CertStoreAddress = SigAddress + SigLength` and the cert store is parsed
+   word-wise, so `L` that is not a multiple of 4 leaves the store unaligned and
+   the device rejects the image before verification ever runs. Practically the
+   band is **multiples of 4 in 44..84**. See `docs/vulnerability.md`.
 3. **Cube roots modulo `2^(8L)` are one modexp, not a few hundred iterations of
    Hensel-style bit lifting.** `gcd(3, 2^(k-1)) = 1`, so cubing is a bijection on
    the odd residues and `s = T^d mod 2^k` with `d = 3^(-1) mod 2^(k-1)` closes

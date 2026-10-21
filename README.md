@@ -195,7 +195,12 @@ description of this bug is imprecise. They are spelled out in
    against, and the window is anchored at the *bottom* of the result.
 3. **Cube roots mod `2^k` need no bit-by-bit lifting.** It is one modular
    exponentiation, because cubing is a bijection there.
-4. **`L` need not be a multiple of 4**, and the padding floor is 5 bytes, not 8.
+4. **The padding floor is 5 bytes, not 8** -- but **`L` does have to be a
+   multiple of 4** in practice. The signature window checks tolerate any `L`,
+   yet `CertStoreAddress = SigAddress + SigLength` and the cert store is parsed
+   word-wise, so a non-multiple leaves it unaligned and the device rejects the
+   image before verification runs (measured on MSM8612: `L` 46 and 53 fail, 60
+   boots). The tool sweeps multiples of 4 by default; `--any-L` opts out.
 
 ## Scope and ethics
 
