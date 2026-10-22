@@ -7,7 +7,7 @@ corrections listed at the end.
 
 ## Primary references
 
-**Ryan Anthony / [@oscardagrach](https://github.com/oscardagrach)** --
+**Ryan / [@oscardagrach](https://github.com/oscardagrach)** --
 [`qualcomm_pbl_siglen_bug`](https://github.com/oscardagrach/qualcomm_pbl_siglen_bug)
 
 Wrote the clear, first-hand account of the flaw: that the PBL takes the signature
@@ -37,19 +37,6 @@ D3 = H((HW_ID XOR 0x5c repeated) || D2)
 with the explicit MSM8x26 / MSM8x60 / **MSM8974** case (`o_key = HW_ID`,
 `i_key = SW_ID`, both 8 bytes). `image_digest()` in `mbn_fakesign.py` is a direct
 transcription of that note, and it reproduces the real hardware result.
-
-**[@Resery](https://github.com/Resery)** --
-[`qualcomm_pbl_siglen_bug`](https://github.com/Resery/qualcomm_pbl_siglen_bug)
-
-Mirror / companion fork of the analysis used during this work.
-
-## Tooling
-
-* **Hex-Rays IDA Pro**, driven through the IDA MCP server, for the disassembly
-  that confirmed the flaw at instruction level in `msm8612.bootrom.bin`.
-* **[@bkerler](https://github.com/bkerler)**'s `emmcdl` for the Sahara / firehose
-  host-side tooling used to load images and read `OEM_PK_HASH` from real
-  hardware.
 
 ## Analysis assistance
 
