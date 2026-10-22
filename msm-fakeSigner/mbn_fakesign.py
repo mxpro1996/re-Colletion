@@ -26,11 +26,11 @@ Digest chain (TalAloni Note 3):
   D3 = H((HW_ID ^ 0x5c repeated) || D2)
   The PBL compares the raw D3 -- no DigestInfo wrapper is involved.
 
-SW_ID / HW_ID are derived from the leaf certificate's subject OU fields
-(typically the 1st and 2nd 16-hex-char OU, after the "07 0001 SHA256"
-hash-algorithm marker). If --sw-id / --hw-id are not given, they are
-extracted from the cert automatically; if given, the value is used but
-a warning is printed when it disagrees with the cert.
+SW_ID / HW_ID are derived from the leaf cert's subject OU fields
+(typically 16-hex tokens after the "07 0001 SHA256" marker). If
+--sw-id / --hw-id are not given, they are extracted from the cert
+automatically; if given and different, a warning is printed because
+the PBL derives the HMAC keys from the cert, not from the CLI.
 
 For security research on your own / authorised targets only.
 """
@@ -65,7 +65,7 @@ def x509_pubkey(cert):
 
 
 def x509_subject_ou(cert):
-    """Return the list of OU strings in the subject (order preserved)."""
+    """Return the OU strings from the subject, order preserved."""
     c = asn1x509.Certificate.load(cert)
     out = []
     for rdn in c.subject.chosen:
@@ -84,12 +84,10 @@ def x509_subject_ou(cert):
 def x509_sw_hw_from_ou(cert):
     """Extract (SW_ID, HW_ID) from the subject OU fields.
 
-    A Qualcomm MBN leaf cert typically carries:
-        OU=07 0001 SHA256        <- hash-algorithm marker, skipped
-        OU=<16 hex>              <- SW_ID
-        OU=<16 hex>              <- HW_ID
-    Some variants carry 'SW_ID=...' / 'HW_ID=...' style prefixes; both are
-    handled by scanning every OU for 16-hex tokens.
+    A Qualcomm MBN leaf typically carries OU=07 0001 SHA256 (hash-algorithm
+    marker) followed by OU=<16 hex> (SW_ID) and OU=<16 hex> (HW_ID). Some
+    variants stuff everything into one comma-separated OU; both shapes are
+    handled by scanning every OU for 16-hex tokens and taking the first two.
 
     Returns (sw_upper, hw_upper); either may be None.
     """
@@ -462,74 +460,80 @@ def _norm_hex16(s):
 def _resolve_sw_hw(args, cert, quiet=False):
     """Resolve the two HMAC keys (inner 0x36 = SW_ID, outer 0x5c = HW_ID).
 
-    Priority for each key:
-      1. --key1 / --key2 explicit 8-byte hex override (silent, used as-is)
-      2. --sw-id / --hw-id if specified, with a mismatch warning vs the cert
-      3. extracted from the leaf cert's subject OU (1st / 2nd 16-hex token)
-      4. default 0x0000000000000000, with a note that the cert had none
+    For each key, in priority order:
+      1. --key1 / --key2 explicit 8-byte hex (silent, used as-is)
+      2. --sw-id / --hw-id if given, with a WARNING when it disagrees with the cert
+      3. value extracted from the leaf cert's subject OU (1st / 2nd 16-hex token)
+      4. default 0x0000000000000000, with a WARNING (unverifiable)
+
+    Every path prints the value, its source, and the cert-derived value.
     """
     cert_sw, cert_hw = x509_sw_hw_from_ou(cert)
 
-    # ---- inner 0x36 key (SW_ID) ----
-    if getattr(args, "key1", None):
-        key1 = parse_hex8(args.key1, "key1")
-        if not quiet:
-            print("[+] i_key(0x36) = %s (from --key1)" % key1.hex())
-    elif getattr(args, "sw_id", None):
-        user = _norm_hex16(args.sw_id)
-        if cert_sw and user != cert_sw:
-            print("[!] WARNING: --sw-id %s does not match the value in the leaf"
-                  " cert (%s)." % (user, cert_sw))
-            print("    PBL derives the inner HMAC key from the cert; a mismatched"
-                  " key produces a signature the PBL rejects (digest mismatch).")
-        key1 = parse_hex8(user, "sw-id")
-        if not quiet:
-            src = "from --sw-id"
-            if cert_sw is None:
-                src += "; cert has no 16-hex OU"
-            elif user == cert_sw:
-                src += " (matches cert)"
-            print("[+] i_key(0x36) = %s (%s)" % (key1.hex(), src))
-    elif cert_sw:
-        key1 = parse_hex8(cert_sw, "sw-id (from cert)")
-        if not quiet:
-            print("[+] i_key(0x36) = %s (auto from cert OU)" % key1.hex())
-    else:
-        key1 = parse_hex8("0000000000000000", "default sw-id")
-        if not quiet:
-            print("[+] i_key(0x36) = %s (default; leaf cert has no 16-hex OU)"
-                  % key1.hex())
+    def _resolve(label, cli_val, cli_override, cert_val, cli_flag):
+        if cli_override is not None:
+            key = parse_hex8(cli_override, label)
+            if not quiet:
+                print("[+] %s = %s" % (label, key.hex()))
+                print("    source: %s (explicit override, no cert check)" % cli_flag)
+            return key
 
-    # ---- outer 0x5c key (HW_ID) ----
-    if getattr(args, "key2", None):
-        key2 = parse_hex8(args.key2, "key2")
-        if not quiet:
-            print("[+] o_key(0x5c) = %s (from --key2)" % key2.hex())
-    elif getattr(args, "hw_id", None):
-        user = _norm_hex16(args.hw_id)
-        if cert_hw and user != cert_hw:
-            print("[!] WARNING: --hw-id %s does not match the value in the leaf"
-                  " cert (%s)." % (user, cert_hw))
-            print("    PBL derives the outer HMAC key from the cert; a mismatched"
-                  " key produces a signature the PBL rejects (digest mismatch).")
-        key2 = parse_hex8(user, "hw-id")
-        if not quiet:
-            src = "from --hw-id"
-            if cert_hw is None:
-                src += "; cert has no 16-hex OU"
-            elif user == cert_hw:
-                src += " (matches cert)"
-            print("[+] o_key(0x5c) = %s (%s)" % (key2.hex(), src))
-    elif cert_hw:
-        key2 = parse_hex8(cert_hw, "hw-id (from cert)")
-        if not quiet:
-            print("[+] o_key(0x5c) = %s (auto from cert OU)" % key2.hex())
-    else:
-        key2 = parse_hex8("0000000000000000", "default hw-id")
-        if not quiet:
-            print("[+] o_key(0x5c) = %s (default; leaf cert has no 16-hex OU)"
-                  % key2.hex())
+        if cli_val is not None:
+            user = _norm_hex16(cli_val)
+            key = parse_hex8(user, label)
+            if not quiet:
+                print("[+] %s = %s" % (label, key.hex()))
+                print("    source: CLI %s" % cli_flag)
+            if cert_val is None:
+                if not quiet:
+                    print("    cert:   (not found in subject OU)")
+                    print("[!] NOTE: %s was given on the command line but the leaf"
+                          " cert has no matching 16-hex OU." % label)
+                    print("    PBL derives this key from the cert; if the cert really"
+                          " has none, the CLI value is the only input and the PBL"
+                          " will use its own default (0x0000000000000000).")
+            elif user == cert_val:
+                if not quiet:
+                    print("    cert:   %s (matches)" % cert_val)
+            else:
+                if not quiet:
+                    print("    cert:   %s  <-- MISMATCH" % cert_val)
+                    print("[!] WARNING: %s %s does not match the value in the leaf"
+                          " cert (%s)." % (cli_flag, user, cert_val))
+                    print("    The PBL derives this HMAC key from the cert, not from"
+                          " the CLI. A mismatched value produces a DIFFERENT D3 and"
+                          " the PBL will reject the signature (digest mismatch,"
+                          " FAIL code 1173).")
+                    print("    Drop %s to use the cert value, or double-check that"
+                          " the cert is the one you meant to use." % cli_flag)
+            return key
 
+        if cert_val is not None:
+            key = parse_hex8(cert_val, label)
+            if not quiet:
+                print("[+] %s = %s" % (label, key.hex()))
+                print("    source: auto from cert subject OU")
+                print("    cert:   %s" % cert_val)
+            return key
+
+        key = parse_hex8("0000000000000000", label)
+        if not quiet:
+            print("[+] %s = %s" % (label, key.hex()))
+            print("    source: DEFAULT (leaf cert has no 16-hex OU, and no CLI value"
+                  " was given)")
+            print("[!] WARNING: using the default 0x0. If the PBL derives this key"
+                  " from the cert and the cert does carry it, the digest will"
+                  " differ and the signature will be rejected.")
+        return key
+
+    key1 = _resolve("SW_ID (inner 0x36)",
+                    getattr(args, "sw_id", None),
+                    getattr(args, "key1", None),
+                    cert_sw, "--sw-id")
+    key2 = _resolve("HW_ID (outer 0x5c)",
+                    getattr(args, "hw_id", None),
+                    getattr(args, "key2", None),
+                    cert_hw, "--hw-id")
     return key1, key2
 
 
@@ -598,6 +602,9 @@ def cmd_info(a):
         print("      SW_ID = %s" % (sw_c or "(none)"))
         print("      HW_ID = %s" % (hw_c or "(none)"))
         print("    (pass --sw-id / --hw-id to override; leave blank to auto-use)")
+    else:
+        print("[!] no 16-hex OU found; sign/verify will fall back to defaults"
+              " unless --sw-id / --hw-id are given")
     if a.dump_code:
         off = hdr.file_off(hdr.load_addr)
         open(a.dump_code, "wb").write(buf[off:off + hdr.code_size])
@@ -659,7 +666,7 @@ def cmd_sign(a):
     if e != 3:
         raise SystemExit("leaf exponent e=%d; short-signature forgery is not feasible (need e=3)" % e)
 
-    # ---- NEW: resolve SW_ID / HW_ID from cert if not given ----
+    # Resolve SW_ID / HW_ID (auto from cert unless overridden).
     key1, key2 = _resolve_sw_hw(a, certs[idx])
 
     if a.payload:
@@ -812,9 +819,7 @@ def cmd_verify(a):
     sig = buf[hdr.file_off(hdr.sig_addr):][:hdr.sig_len]
     algo = detect_hash(certs[idx]) if a.hash == "auto" else a.hash
 
-    # ---- NEW: resolve SW_ID / HW_ID from cert if not given ----
     key1, key2 = _resolve_sw_hw(a, certs[idx])
-
     _d1, _d2, d3 = image_digest(hdr.raw, code, key1, key2, algo)
 
     print("\n[+] recomputing the digest")
@@ -844,7 +849,8 @@ def cmd_selftest(a):
     print("=" * 72)
     n, e, d, _p, _q = _keygen(2048, 3)
     print("\n[+] generated key: n = %d bits, e = %d" % (n.bit_length(), e))
-    # include a 16-hex SW_ID / HW_ID in the OU so the extraction path is exercised
+    # Embed a 16-hex SW_ID / HW_ID into the OU so the auto-extraction path is
+    # exercised end to end.
     cert = build_selfsigned(
         n, e, d, ou=b"07 0001 SHA256,0000000000000000,0000000000000001")
     print("[+] self-signed certificate: %d bytes" % len(cert))
@@ -874,12 +880,10 @@ def cmd_selftest(a):
     a.leaf_index = 0
     a.key1 = a.key2 = None
     a.hash = "auto"
-    # leave sw_id / hw_id as the user passed them (None if not given):
-    # the extraction path will now pick them up from the cert OU.
-    if a.sw_id is None:
-        a.sw_id = "0000000000000000"
-    if a.hw_id is None:
-        a.hw_id = "0000000000000001"
+    # If the user didn't override, leave sw_id / hw_id as None so the
+    # auto-extraction path from the cert OU is tested.
+    a.sw_id = a.sw_id if a.sw_id is not None else None
+    a.hw_id = a.hw_id if a.hw_id is not None else None
     a.L = a.L
     a.any_L = False
     a.code_pad = 0
