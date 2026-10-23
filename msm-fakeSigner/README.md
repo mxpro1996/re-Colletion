@@ -13,11 +13,11 @@ Confirmed first-hand, by disassembling the boot ROMs:
 
 | target | state |
 |---|---|
-| APQ8064 PBL | vulnerable |
-| APQ8084 PBL | vulnerable |
-| MSM8974 PBL | vulnerable |
-| MSM8x10 PBL | vulnerable |
-| MSM8x26 PBL | vulnerable |
+| APQ8064<br>(SDM600-) | vulnerable |
+| APQ8084<br>(SDM805) | vulnerable |
+| MSM8974<br>(SDM800) | vulnerable |
+| MSM8x10<br>(SDM200) | vulnerable |
+| MSM8x26<br>(SDM400)| vulnerable |
 
 
 ## Quick start
