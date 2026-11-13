@@ -13,7 +13,8 @@ the actually affected verification range is:
 
 
 ## Influenced
-Confirmed first-hand, by disassembling the boot ROMs:
+Confirmed first-hand, by disassembling the boot ROMs: \
+Legacy-msm often share the "DNA" between series, it's not rare to see these
 
 | target | alias | state |
 |---|---|---|
