@@ -9,7 +9,7 @@ the actually affected verification range is:
 
 - `pbl -> sahara (eHostDL)` 
 - `pbl -> sbl` 
-- `pbl -> sbl -> Image` 
+- `pbl -> sbl -> Image (aboot..)` 
 
 
 ## Influenced
