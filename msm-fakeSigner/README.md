@@ -1,23 +1,27 @@
 # legacy-fakeSigner
-**Templated by AI, with the progress of interpreting, I will restruct it.**\
-The legacy PBL is blinded by the `sign_len` from the image header and never requires it to equal the RSA modulus length. \
-When any certificate in the chain carries
-public exponent **e = 3**, that is enough to forge a signature over an arbitrary
-image with no private key at all.
 
----
+The legacy PBL is blinded by the `sign_len` field from the MBN-header and never requires it to equal the RSA modulus length. 
+When any certificate in the chain carries a public exponent of:```e = 3```\
+It's sufficient to forge a signature over an arbitrary image with no private key at all.
 
-## Affected range
+Given the boot-related function table is reused during:```pbl -> sbl -> down_stream```\
+the actually affected verification range is:
 
+- `pbl -> sahara (eHostDL)` 
+- `pbl -> sbl` 
+- `pbl -> sbl -> Image` 
+
+
+## Influenced
 Confirmed first-hand, by disassembling the boot ROMs:
 
-| target | state |
-|---|---|
-| APQ8064<br>(SDM600-) | vulnerable |
-| APQ8084<br>(SDM805) | vulnerable |
-| MSM8974<br>(SDM800) | vulnerable |
-| MSM8x10<br>(SDM200) | vulnerable |
-| MSM8x26<br>(SDM400)| vulnerable |
+| target | alias | state |
+|---|---|---|
+| MSM8x10 | SDM200 | vulnerable |
+| MSM8x26 | SDM400 | vulnerable |
+| APQ8064 | SDM600- | vulnerable |
+| MSM8974 | SDM800 | vulnerable |
+| APQ8084 | SDM805 | vulnerable |
 
 
 ## Quick start
@@ -34,10 +38,19 @@ mbn_fakesign.py sign --payload-mbn prog_emmc_firehose_8x10.mbn \
 mbn_fakesign.py sign --donor MPRG8x10.mbn --payload-mbn prog_emmc_firehose_8x10.mbn \
         --out out.mbn
 
-# 4) no hardware needed -- self-contained end-to-end demo (generates its own e=3 key)
-mbn_fakesign.py selftest
-# 5) re-verify from disk only -- re-derives everything, trusts the signing run for nothing
-mbn_fakesign.py verify --mbn firehose_signed.mbn
+```
+
+## Appendix
+```c
+MSM8974/8612 Bootrom laystack
+f8002000 - app bootrom struct
+fc000000-fc002c28 - RPM bootrom
+fc004000-fc010000 - Modem bootrom
+fc010000-fc02f800 - APP bootrom
+fc02f800-fc02fa08 - RPM bootrom part2
+fc100080 - bootrom error stack
+There is a event log buffer at 0xFC102144, and a fatal error buffer at 0xFC102084 which can be interrogated using the sahara protocol.
+# Refer from https://nlitsme.github.io/2019/11/msm-8974-bootrom/
 ```
 
 ## Scope
@@ -46,9 +59,13 @@ This is for security research on hardware you own or are authorised to test.\
 It exists so that the flaw
 can be verified and measured.
 
+
 ## Credit
 **Ryan** --
 [`qualcomm_pbl_siglen_bug`](https://github.com/oscardagrach/qualcomm_pbl_siglen_bug)
 
 **Tal Aloni** --
 [`QualcommSecureBoot-SecondaryExecutableVerifier`](https://github.com/TalAloni/QualcommSecureBoot-SecondaryExecutableVerifier)
+
+**HY4** -- one AI
+
